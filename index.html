@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DHT11 Smart Dashboard</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f3f6fb;
+      color: #222;
+    }
+    .container {
+      max-width: 1100px;
+      margin: auto;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+      color: #1f3c88;
+    }
+    .top-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 16px;
+      font-size: 15px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    .btn-refresh {
+      background: #1f78ff;
+      color: white;
+    }
+    .btn-clear {
+      background: #ff4d4f;
+      color: white;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+    }
+    .card h3 {
+      margin-top: 0;
+      font-size: 16px;
+      color: #666;
+    }
+    .value {
+      font-size: 34px;
+      font-weight: bold;
+      margin-top: 10px;
+    }
+    .status-normal {
+      color: #1f9d55;
+      font-weight: bold;
+    }
+    .status-alert {
+      color: #d62828;
+      font-weight: bold;
+    }
+
+    .chart-box, .table-box {
+      background: white;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+      margin-bottom: 20px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    th, td {
+      border-bottom: 1px solid #eee;
+      padding: 10px;
+      text-align: center;
+    }
+    th {
+      background: #f7f9fc;
+    }
+
+    .note {
+      text-align: center;
+      color: #666;
+      font-size: 13px;
+      margin-top: 8px;
+    }
+
+    .alert-banner {
+      display: none;
+      background: #ffe5e5;
+      border: 1px solid #ffb3b3;
+      color: #b00020;
+      padding: 14px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+      font-weight: bold;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>DHT11 Smart Dashboard</h1>
+
+    <div class="top-actions">
+      <button class="btn-refresh" onclick="location.reload()">รีเฟรชหน้า</button>
+      <button class="btn-clear" onclick="clearHistory()">ล้างประวัติย้อนหลัง</button>
+    </div>
+
+    <div id="alertBanner" class="alert-banner">⚠️ อุณหภูมิสูง กรุณาเปิดแอร์สำรอง</div>
+
+    <div class="cards">
+      <div class="card">
+        <h3>อุณหภูมิปัจจุบัน</h3>
+        <div class="value" id="temp">-- °C</div>
+      </div>
+
+      <div class="card">
+        <h3>ความชื้นปัจจุบัน</h3>
+        <div class="value" id="hum">-- %</div>
+      </div>
+
+      <div class="card">
+        <h3>สถานะ</h3>
+        <div class="value" id="statusText" style="font-size:22px;">กำลังโหลด...</div>
+      </div>
+
+      <div class="card">
+        <h3>อัปเดตล่าสุด</h3>
+        <div class="value" id="updated" style="font-size:22px;">--</div>
+      </div>
+    </div>
+
+    <div class="chart-box">
+      <h2>กราฟย้อนหลังอุณหภูมิ / ความชื้น</h2>
+      <canvas id="sensorChart"></canvas>
+      <div class="note">แสดงข้อมูลย้อนหลังล่าสุดจาก Firebase</div>
+    </div>
+
+    <div class="table-box">
+      <h2>ตารางย้อนหลังล่าสุด</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>เวลา</th>
+            <th>อุณหภูมิ (°C)</th>
+            <th>ความชื้น (%)</th>
+            <th>สถานะ</th>
+          </tr>
+        </thead>
+        <tbody id="historyTable">
+          <tr><td colspan="4">กำลังโหลด...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import {
+      getDatabase,
+      ref,
+      onValue,
+      get,
+      remove
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    // =========================
+    // แก้ค่า config ให้เป็นของโปรเจกต์เธอ
+    // =========================
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+      databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_PROJECT_ID.firebasestorage.app",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    const sensorRef = ref(db, "sensor");
+    const historyRef = ref(db, "history");
+
+    const tempEl = document.getElementById("temp");
+    const humEl = document.getElementById("hum");
+    const statusTextEl = document.getElementById("statusText");
+    const updatedEl = document.getElementById("updated");
+    const historyTable = document.getElementById("historyTable");
+    const alertBanner = document.getElementById("alertBanner");
+
+    let chart;
+
+    function formatThaiTime(sec) {
+      if (!sec) return "-";
+      const d = new Date(sec * 1000);
+      return d.toLocaleString("th-TH", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+    }
+
+    // ===== ฟังค่าปัจจุบันแบบ realtime =====
+    onValue(sensorRef, (snapshot) => {
+      const data = snapshot.val();
+      if (!data) return;
+
+      tempEl.innerText = `${data.temperature ?? "--"} °C`;
+      humEl.innerText = `${data.humidity ?? "--"} %`;
+      statusTextEl.innerText = data.message ?? "-";
+      updatedEl.innerText = formatThaiTime(data.updated_at);
+
+      if (data.status === "alert") {
+        statusTextEl.className = "value status-alert";
+        alertBanner.style.display = "block";
+      } else {
+        statusTextEl.className = "value status-normal";
+        alertBanner.style.display = "none";
+      }
+    });
+
+    // ===== โหลดประวัติย้อนหลัง =====
+    async function loadHistory() {
+      const snapshot = await get(historyRef);
+      const data = snapshot.val();
+
+      if (!data) {
+        historyTable.innerHTML = `<tr><td colspan="4">ยังไม่มีข้อมูลย้อนหลัง</td></tr>`;
+        if (chart) chart.destroy();
+        return;
+      }
+
+      let arr = Object.values(data);
+
+      // เรียงตามเวลาเก่า -> ใหม่
+      arr.sort((a, b) => a.timestamp - b.timestamp);
+
+      // เอาแค่ 20 รายการล่าสุดสำหรับกราฟ/ตาราง
+      const latest = arr.slice(-20);
+
+      // ===== วาดตาราง =====
+      historyTable.innerHTML = "";
+      latest.slice().reverse().forEach(item => {
+        const row = `
+          <tr>
+            <td>${formatThaiTime(item.timestamp)}</td>
+            <td>${item.temperature ?? "-"}</td>
+            <td>${item.humidity ?? "-"}</td>
+            <td>${item.message ?? "-"}</td>
+          </tr>
+        `;
+        historyTable.innerHTML += row;
+      });
+
+      // ===== วาดกราฟ =====
+      const labels = latest.map(item => {
+        const d = new Date(item.timestamp * 1000);
+        return d.toLocaleTimeString("th-TH", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit"
+        });
+      });
+
+      const tempData = latest.map(item => item.temperature);
+      const humData = latest.map(item => item.humidity);
+
+      const ctx = document.getElementById("sensorChart").getContext("2d");
+      if (chart) chart.destroy();
+
+      chart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: "อุณหภูมิ (°C)",
+              data: tempData,
+              borderWidth: 2,
+              tension: 0.3
+            },
+            {
+              label: "ความชื้น (%)",
+              data: humData,
+              borderWidth: 2,
+              tension: 0.3
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false
+        }
+      });
+
+      document.getElementById("sensorChart").parentElement.style.height = "380px";
+    }
+
+    // ===== ปุ่มล้างประวัติ =====
+    window.clearHistory = async function() {
+      const ok = confirm("ต้องการล้างประวัติย้อนหลังทั้งหมดใช่หรือไม่?");
+      if (!ok) return;
+
+      try {
+        await remove(historyRef);
+        alert("ล้างประวัติย้อนหลังเรียบร้อย");
+        loadHistory();
+      } catch (err) {
+        alert("ล้างข้อมูลไม่สำเร็จ: " + err.message);
+      }
+    }
+
+    // โหลดครั้งแรก
+    loadHistory();
+
+    // รีโหลดประวัติทุก 5 วินาที เผื่อมีข้อมูลใหม่เพิ่มเข้ามา
+    setInterval(loadHistory, 5000);
+  </script>
+</body>
+</html>
